@@ -24,6 +24,31 @@ const callSetNatmap = rpc.declare({ object: 'luci.pw2_guard', method: 'set_natma
 
 const POLL_INTERVAL = 3;
 
+/* The two tables switch from a real table to cards at different widths: the clients table has more to show
+ * per row (address + MAC, traffic + speed), so it needs more room. */
+const RULES_TABLE_MIN = 661;
+const CLIENTS_TABLE_MIN = 661;
+
+/* real table, whatever the theme does at this width (it switches to stacked cells at its own breakpoint,
+ * which is why the middle widths used to fall apart). Short columns stay on one line, the last column
+ * takes what is left and wraps when it has to. */
+function wideCss(sel) {
+	return sel + ' { display:table !important; width:100% !important; }' +
+		sel + ' .tr { display:table-row !important; }' +
+		sel + ' .tr.cbi-section-table-titles { display:table-row !important; }' +
+		sel + ' .th, ' + sel + ' .td { display:table-cell !important; position:static !important; float:none !important; width:auto; max-width:none !important; height:auto !important; padding:.6rem .5rem !important; text-align:center !important; vertical-align:middle !important; white-space:nowrap; }' +
+		sel + ' .td::before, ' + sel + ' .td::after { content:none !important; }';
+}
+
+/* narrow: the theme stacks the cells in its own way (labels as absolutely positioned pseudo elements,
+ * flex items, ...). Reset all of that; the grid areas of each table are laid out explicitly. */
+function narrowCss(sel) {
+	return sel + ' .tr.cbi-section-table-titles { display:none !important; }' +
+		sel + ' .tr.cbi-section-table-row { display:grid !important; align-items:baseline; gap:.2rem 1rem; padding:.6rem 1rem !important; margin:0 !important; height:auto !important; min-height:0 !important; flex:none !important; border-top:1px solid rgba(128,128,128,.15); }' +
+		sel + ' .tr.cbi-section-table-row .td { display:block !important; position:static !important; float:none !important; flex:none !important; width:auto !important; max-width:none !important; min-width:0 !important; height:auto !important; min-height:0 !important; margin:0 !important; padding:0 !important; border:0 !important; transform:none !important; text-align:left !important; white-space:normal; line-height:1.4; }' +
+		sel + ' .td::after, ' + sel + ' .td::before { content:none !important; }';
+}
+
 const CSS =
 	'.pg-label { display:inline-block; padding:2px 6px; border-radius:3px; color:#fff; font-weight:bold; font-size:0.85em; }' +
 	'.pg-speed { color:#0069d6; font-size:0.8em; font-weight:bold; margin-left:4px; }' +
@@ -39,63 +64,70 @@ const CSS =
 	'.pg-wrap { container-type:inline-size; }' +
 	'.pg-tbl .td.pg-tag .pg-label { margin:0 4px 2px 0; }' +
 	'.pg-speed { white-space:nowrap; }' +
-	/* wide: a real table, whatever the theme does at this width (it switches to stacked cells at its own
-	 * breakpoint, which is why the middle widths used to fall apart). Short columns stay on one line,
-	 * the last column takes what is left and wraps when it has to. */
-	'@container (min-width: 661px) {' +
-	'  .pg-tbl { display:table !important; width:100% !important; }' +
-	'  .pg-tbl .tr { display:table-row !important; }' +
-	'  .pg-tbl .tr.cbi-section-table-titles { display:table-row !important; }' +
-	'  .pg-tbl .th, .pg-tbl .td { display:table-cell !important; position:static !important; float:none !important; width:auto; max-width:none !important; height:auto !important; padding:.6rem .5rem !important; text-align:center !important; vertical-align:middle !important; white-space:nowrap; }' +
-	'  .pg-tbl .td::before, .pg-tbl .td::after { content:none !important; }' +
-	'  .pg-tbl .td.pg-ract, .pg-tbl .td.pg-tag { white-space:normal; }' +
-	'  .pg-clients .td.pg-type { width:1%; }' +
+	/* clients: IP over MAC, traffic over speed (two lines each) */
+	'.pg-clients .pg-ip, .pg-clients .pg-mac { display:block; }' +
+	'.pg-clients .pg-mac { font-size:.85em; opacity:.8; }' +
+	'.pg-clients .pg-cn, .pg-clients .pg-cs { display:inline-block; white-space:nowrap; text-align:center; }' +
+	'.pg-clients .pg-cn { min-width:10.5ch; }' +
+	'.pg-clients .pg-cs { min-width:12ch; font-size:.85em; font-weight:bold; }' +
+	/* same colours as the Inbound / Outbound labels of the realtime bandwidth graph: download blue, upload green */
+	'.pg-clients .pg-cs-dn { color:blue; }' +
+	'.pg-clients .pg-cs-up { color:green; }' +
+	/* traffic column: as narrow as its content, the block centred under its header, its cells centred too */
+	'.pg-clients .pg-trafbox { display:inline-grid; grid-template-columns:auto auto; column-gap:.7em; row-gap:.05rem; text-align:center; }' +
+	'@container (min-width: ' + RULES_TABLE_MIN + 'px) {' +
+	wideCss('.pg-rules') +
+	'  .pg-rules .td.pg-ract { white-space:normal; }' +
 	'}' +
-	/* narrow: the theme stacks the cells in its own way (labels as absolutely positioned pseudo elements,
-	 * flex items, ...). Reset all of that and lay the cards out explicitly:
-	 * rules:   rule name (bold) + action on line 1, "Packets: n   Bytes: n" on line 2
-	 * clients: hostname (bold) + tags on line 1, IP + type on line 2, MAC on line 3 */
-	'@container (max-width: 660px) {' +
-	'  .pg-tbl .tr.cbi-section-table-titles { display:none !important; }' +
-	'  .pg-tbl .tr.cbi-section-table-row { display:grid !important; align-items:baseline; gap:.2rem 1rem; padding:.6rem 1rem !important; margin:0 !important; height:auto !important; min-height:0 !important; flex:none !important; border-top:1px solid rgba(128,128,128,.15); }' +
-	'  .pg-tbl .tr.cbi-section-table-row .td { display:block !important; position:static !important; float:none !important; flex:none !important; width:auto !important; max-width:none !important; min-width:0 !important; height:auto !important; min-height:0 !important; margin:0 !important; padding:0 !important; border:0 !important; transform:none !important; text-align:left !important; white-space:normal; line-height:1.4; }' +
-	'  .pg-tbl .td::after { content:none !important; }' +
-	'  .pg-tbl .td::before { content:none !important; }' +
-	'  .pg-tbl .td.pg-rpk::before, .pg-tbl .td.pg-rby::before, .pg-tbl .td.pg-mac::before { content:attr(data-title) ":" !important; display:inline !important; position:static !important; float:none !important; width:auto !important; margin:0 .4em 0 0 !important; padding:0 !important; font-weight:600; opacity:.7; }' +
+	'@container (min-width: ' + CLIENTS_TABLE_MIN + 'px) {' +
+	wideCss('.pg-clients') +
+	'  .pg-clients .td.pg-host, .pg-clients .td.pg-tag { white-space:normal; }' +
+	'  .pg-clients .td.pg-host { overflow-wrap:anywhere; }' +
+	'  .pg-clients .td.pg-type, .pg-clients .td.pg-traf { width:1%; }' +
+	'}' +
+	/* rules, narrow: rule name (bold) + action on line 1, "Packets: n   Bytes: n" on line 2 */
+	'@container (max-width: ' + (RULES_TABLE_MIN - 1) + 'px) {' +
+	narrowCss('.pg-rules') +
+	'  .pg-rules .td.pg-rpk::before, .pg-rules .td.pg-rby::before { content:attr(data-title) ":" !important; display:inline !important; position:static !important; float:none !important; width:auto !important; margin:0 .4em 0 0 !important; padding:0 !important; font-weight:600; opacity:.7; }' +
 	'  .pg-rules .tr.cbi-section-table-row { grid-template-columns:9rem minmax(0,1fr) fit-content(60%); grid-template-areas:"name name act" "pk by by"; }' +
-	'  .pg-clients .tr.cbi-section-table-row { grid-template-columns:auto auto minmax(0,1fr); grid-template-areas:"host host tag" "ip type type" "mac mac mac"; }' +
-	'  .pg-tbl .td.pg-rname { grid-area:name; font-weight:600; overflow-wrap:anywhere; }' +
-	'  .pg-tbl .td.pg-ract { grid-area:act; justify-self:end; text-align:right; min-width:0; }' +
-	'  .pg-tbl .td.pg-rpk { grid-area:pk; }' +
-	'  .pg-tbl .tr.cbi-section-table-row .td.pg-rby { grid-area:by; white-space:nowrap; }' +
-	'  .pg-tbl .td.pg-host { grid-area:host; font-weight:600; overflow-wrap:anywhere; }' +
-	'  .pg-tbl .td.pg-tag { grid-area:tag; justify-self:end; }' +
-	'  .pg-tbl .td.pg-ip { grid-area:ip; }' +
-	'  .pg-tbl .td.pg-type { grid-area:type; }' +
-	'  .pg-tbl .td.pg-mac { grid-area:mac; }' +
-	'  .pg-tbl .td.pg-rpk, .pg-tbl .td.pg-rby, .pg-tbl .td.pg-mac, .pg-tbl .td.pg-type { font-size:.85em; opacity:.8; }' +
-	'  .pg-tbl .td.pg-ract .pg-label { font-size:.8em; white-space:normal; display:inline-block; }' +
+	'  .pg-rules .td.pg-rname { grid-area:name; font-weight:600; overflow-wrap:anywhere; }' +
+	'  .pg-rules .td.pg-ract { grid-area:act; justify-self:end; text-align:right; min-width:0; }' +
+	'  .pg-rules .td.pg-rpk { grid-area:pk; }' +
+	'  .pg-rules .tr.cbi-section-table-row .td.pg-rby { grid-area:by; white-space:nowrap; }' +
+	'  .pg-rules .td.pg-rpk, .pg-rules .td.pg-rby { font-size:.85em; opacity:.8; }' +
+	'  .pg-rules .td.pg-ract .pg-label { font-size:.8em; white-space:normal; display:inline-block; }' +
 	'}' +
-	/* clients, medium-narrow: still three zones in one row - hostname over MAC on the left, IP over type in the
-	 * middle, tags on the right; below this the four values are simply stacked left (the card above) */
-	'@container (min-width: 501px) and (max-width: 660px) {' +
-	'  .pg-clients .tr.cbi-section-table-row { grid-template-columns:fit-content(45%) minmax(0,1fr) auto; grid-template-areas:"host ip tag" "mac type tag"; align-items:center; column-gap:1rem; }' +
-	'  .pg-clients .tr.cbi-section-table-row .td.pg-ip, .pg-clients .tr.cbi-section-table-row .td.pg-type { text-align:center !important; justify-self:stretch; }' +
-	'  .pg-clients .td.pg-ip { overflow-wrap:anywhere; }' +
-	'  .pg-clients .td.pg-mac::before { content:none !important; }' +
-	'  .pg-clients .td.pg-tag { align-self:center; }' +
+	/* clients, narrow card: hostname (bold) + tags on line 1, then IP, MAC, and traffic with speed */
+	'@container (max-width: ' + (CLIENTS_TABLE_MIN - 1) + 'px) {' +
+	narrowCss('.pg-clients') +
+	'  .pg-clients .tr.cbi-section-table-row { grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"host tag" "ip ip" "mac mac" "traf traf"; }' +
+	'  .pg-clients .td.pg-host { grid-area:host; font-weight:600; overflow-wrap:anywhere; }' +
+	'  .pg-clients .td.pg-tag { grid-area:tag; justify-self:end; }' +
+	'  .pg-clients .tr.cbi-section-table-row .td.pg-addr { display:contents !important; }' +
+	'  .pg-clients .pg-ip { grid-area:ip; overflow-wrap:anywhere; }' +
+	'  .pg-clients .pg-mac { grid-area:mac; }' +
+	'  .pg-clients .tr.cbi-section-table-row .td.pg-type { display:none !important; }' +
+	'  .pg-clients .td.pg-traf { grid-area:traf; font-size:.9em; }' +
+	'  .pg-clients .pg-cn, .pg-clients .pg-cs { min-width:0; }' +
 	'}' +
-	/* rules, medium-narrow: same three zones as the clients - rule name on the left, packets over bytes centred
-	 * between, action on the right; below this the card (name + action, then packets and bytes) applies */
-	'@container (min-width: 501px) and (max-width: 660px) {' +
+	/* clients, medium: still three zones - hostname on the left, IP over MAC in the middle, tags on the right; the
+	 * traffic and speed lines sit underneath (fixed tracks, so the middle zone starts at the same x on every row) */
+	'@container (min-width: 501px) and (max-width: ' + (CLIENTS_TABLE_MIN - 1) + 'px) {' +
+	'  .pg-clients .tr.cbi-section-table-row { grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) 6.2rem; grid-template-areas:"host ip tag" "host mac tag" "traf traf tag"; align-items:center; column-gap:.75rem; }' +
+	'  .pg-clients .pg-ip, .pg-clients .pg-mac { text-align:center; }' +
+	'  .pg-clients .tr.cbi-section-table-row .td.pg-tag { align-self:center; justify-self:stretch; text-align:right !important; }' +
+	'  .pg-clients .td.pg-tag .pg-label { margin:1px 0 1px 4px; }' +
+	'}' +
+	/* rules, medium-narrow: three zones - rule name on the left, packets over bytes in the middle, action on
+	 * the right; below this the card (name + action, then packets and bytes) applies */
+	'@container (min-width: 501px) and (max-width: ' + (RULES_TABLE_MIN - 1) + 'px) {' +
 	'  .pg-rules .tr.cbi-section-table-row { grid-template-columns:minmax(0,1.25fr) auto minmax(0,.9fr); grid-template-areas:"name pk act" "name by act"; align-items:center; column-gap:1rem; }' +
-	'  .pg-rules .tr.cbi-section-table-row .td.pg-rpk, .pg-rules .tr.cbi-section-table-row .td.pg-rby { text-align:center !important; justify-self:stretch; }' +
 	'  .pg-rules .td.pg-rname, .pg-rules .td.pg-ract { align-self:center; }' +
 	'  .pg-rules .tr.cbi-section-table-row .td.pg-rpk, .pg-rules .tr.cbi-section-table-row .td.pg-rby { text-align:left !important; justify-self:stretch; }' +
 	'  .pg-rules .tr.cbi-section-table-row .td.pg-rpk::before, .pg-rules .tr.cbi-section-table-row .td.pg-rby::before { display:inline-block !important; min-width:4.6em; }' +
 	'  .pg-rules .tr.cbi-section-table-row .td.pg-rby .pg-sp-inline { display:block; min-width:0; min-height:1.3em; margin-left:6.25em; }' +
 	'}' +
-	'@container (max-width: 660px) {' +
+	'@container (max-width: ' + (RULES_TABLE_MIN - 1) + 'px) {' +
 	'  .pg-rules .tr.cbi-section-table-row .td.pg-rsp { display:none !important; }' +
 	'  .pg-rules .td.pg-rby .pg-sp-inline { display:inline-block; }' +
 	'}' +
@@ -105,8 +137,8 @@ const CSS =
 	/* very narrow: the action label gets its own full-width line under the rule name, so it can wrap freely */
 	'@container (max-width: 420px) {' +
 	'  .pg-rules .tr.cbi-section-table-row { grid-template-columns:minmax(0,1fr) minmax(0,1fr); grid-template-areas:"name name" "act act" "pk by"; }' +
-	'  .pg-tbl .td.pg-ract { justify-self:start; text-align:left; }' +
-	'  .pg-tbl .tr.cbi-section-table-row .td.pg-rby { white-space:normal; }' +
+	'  .pg-rules .td.pg-ract { justify-self:start; text-align:left; }' +
+	'  .pg-rules .tr.cbi-section-table-row .td.pg-rby { white-space:normal; }' +
 	'}' +
 	'.pg-head { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem 1.5rem; }' +
 	'.pg-natmap { display:inline-flex; align-items:center; gap:.75rem; }' +
@@ -179,6 +211,7 @@ function actionBadge(raw) {
 
 return view.extend({
 	lastBytes: {},
+	lastClient: {},
 
 	load() {
 		return callStatus();
@@ -216,7 +249,7 @@ return view.extend({
 		]);
 
 		this.clientsTable = E('table', { 'class': 'table cbi-section-table pg-tbl pg-clients' }, [
-			headerRow([ _('Hostname'), _('MAC Address'), _('IP Address'), _('Type'), _('Tag') ]),
+			headerRow(this.clientTitles()),
 			emptyRow(5, _('Fetching client list...'))
 		]);
 
@@ -316,36 +349,86 @@ return view.extend({
 		});
 	},
 
+	clientTitles() {
+		return [ _('Hostname'), _('IP Address / MAC'), _('Traffic / Speed'), _('Type'), _('Tag') ];
+	},
+
+	/* The rows are only rebuilt when a client appears, disappears or changes its name / address / tag;
+	 * the traffic numbers are written into the existing cells on every poll. */
 	updateClients(clients) {
-		const sig = JSON.stringify(clients);
+		const key = JSON.stringify(clients.map(c => [ c.ip, c.mac, c.hostname, c.is_server ]));
 
-		if (sig === this.clientSig)
-			return;
+		if (key !== this.clientKey) {
+			this.clientKey = key;
+			this.clientRefs = {};
 
-		this.clientSig = sig;
+			const crows = [ headerRow(this.clientTitles()) ];
 
-		const crows = [ headerRow([ _('Hostname'), _('MAC Address'), _('IP Address'), _('Type'), _('Tag') ]) ];
+			if (!clients.length)
+				crows.push(emptyRow(5, _('No redirection clients found in NFT sets.')));
 
-		if (!clients.length)
-			crows.push(emptyRow(5, _('No redirection clients found in NFT sets.')));
+			clients.forEach((c, i) => {
+				const isV6 = String(c.ip).indexOf(':') > -1;
+				const tag = E('td', { 'class': 'td pg-tag' }, [ badge('VPN', '#46a546') ]);
 
-		clients.forEach((c, i) => {
-			const isV6 = String(c.ip).indexOf(':') > -1;
-			const tag = E('td', { 'class': 'td pg-tag' }, [ badge('VPN', '#46a546') ]);
+				if (c.is_server)
+					tag.appendChild(badge('Server', '#0069d6'));
 
-			if (c.is_server)
-				tag.appendChild(badge('Server', '#0069d6'));
+				/* line 1: total sent / received, line 2: current speed */
+				const ref = {
+					tu: textEl('span', 'pg-cn', ''), td: textEl('span', 'pg-cn', ''),
+					su: textEl('span', 'pg-cs pg-cs-up', ''), sd: textEl('span', 'pg-cs pg-cs-dn', '')
+				};
 
-			crows.push(E('tr', { 'class': 'tr cbi-section-table-row cbi-rowstyle-' + (1 + i % 2) }, [
-				cell(c.hostname ? textEl('span', '', c.hostname) : E('em', {}, [ 'unknown' ]), 'pg-host'),
-				cell(textEl('span', '', c.mac || '\u2014'), 'pg-mac', _('MAC')),
-				cell(textEl('span', isV6 ? 'pg-ip6' : '', c.ip), 'pg-ip'),
-				cell(textEl('span', '', isV6 ? 'IPv6' : 'IPv4'), 'pg-type'),
-				tag
-			]));
+				this.clientRefs[c.ip] = ref;
+
+				const traf = E('td', { 'class': 'td pg-traf', 'title': _('Upload / Download') }, [
+					/* a 2 x 2 grid: one row per direction (upload, download), traffic then speed in the columns */
+					E('div', { 'class': 'pg-trafbox' }, [ ref.tu, ref.su, ref.td, ref.sd ])
+				]);
+
+				crows.push(E('tr', { 'class': 'tr cbi-section-table-row cbi-rowstyle-' + (1 + i % 2) }, [
+					cell(c.hostname ? textEl('span', '', c.hostname) : E('em', {}, [ 'unknown' ]), 'pg-host'),
+					E('td', { 'class': 'td pg-addr' }, [
+						textEl('div', 'pg-ip' + (isV6 ? ' pg-ip6' : ''), c.ip),
+						textEl('div', 'pg-mac', c.mac || '\u2014')
+					]),
+					traf,
+					cell(textEl('span', '', isV6 ? 'IPv6' : 'IPv4'), 'pg-type'),
+					tag
+				]));
+			});
+
+			this.keepScroll(() => L.dom.content(this.clientsTable, crows));
+		}
+
+		clients.forEach(c => {
+			const ref = this.clientRefs[c.ip];
+
+			if (!ref)
+				return;
+
+			const up = c.up, down = c.down;
+
+			/* no counters (service started before the accounting rules existed): show dashes */
+			if (up == null || down == null) {
+				ref.tu.textContent = ref.td.textContent = ref.su.textContent = ref.sd.textContent = '\u2014';
+				delete this.lastClient[c.ip];
+				return;
+			}
+
+			const prev = this.lastClient[c.ip];
+
+			/* a counter that went down was reset (service restarted): count that interval as zero */
+			const rate = (cur, old) => (old !== undefined && cur >= old) ? (cur - old) / POLL_INTERVAL : 0;
+
+			ref.tu.textContent = '\u2191 ' + formatBytes(up);
+			ref.td.textContent = '\u2193 ' + formatBytes(down);
+			ref.su.textContent = '\u2191 ' + formatBytes(rate(up, prev && prev.up)) + '/s';
+			ref.sd.textContent = '\u2193 ' + formatBytes(rate(down, prev && prev.down)) + '/s';
+
+			this.lastClient[c.ip] = { up: up, down: down };
 		});
-
-		this.keepScroll(() => L.dom.content(this.clientsTable, crows));
 	},
 
 	/* same badge switch as the main one; toggles in place without reloading the page */
