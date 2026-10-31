@@ -1,1 +1,24 @@
+#!/bin/sh
 
+# Create /etc/config/pw2_guard and import the two switches from the old
+# luci-app-advanced config (/etc/config/advanced), if it is still around.
+[ -e /etc/config/pw2_guard ] || touch /etc/config/pw2_guard
+
+if [ -z "$(uci -q get pw2_guard.global)" ]; then
+	old_bypass="$(uci -q get advanced.global.enable_bypass)"
+	old_natmap="$(uci -q get advanced.global.enable_natmap)"
+
+	uci -q batch <<EOT
+set pw2_guard.global=pw2_guard
+set pw2_guard.global.enable_bypass='${old_bypass:-0}'
+set pw2_guard.global.enable_natmap='${old_natmap:-0}'
+commit pw2_guard
+EOT
+
+	# the old package's removal also removed its boot symlink
+	[ "${old_bypass:-0}" = "1" ] && /etc/init.d/bypass_guard enable
+fi
+
+rm -f /tmp/luci-indexcache*
+rm -rf /tmp/luci-modulecache/*
+exit 0
