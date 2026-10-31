@@ -4,7 +4,7 @@
  * rpcd plugin for luci-app-pw2-guard (object: luci.pw2_guard)
  *
  *   status      -> { enabled, running, natmap, has_natmap }
- *   data        -> { rules: [...], clients: [...] }   (parsed from the nft table)
+ *   data        -> { rules: [...], clients: [...] }   (parsed from the nft table; clients carry up / down byte counters)
  *   set_bypass  -> { set: 'enable' | 'disable' }
  *   set_natmap  -> { set: '1' | '0' }
  *
@@ -259,7 +259,49 @@ function fetch_set(name) {
 	return out;
 }
 
+/* per-element byte counters of an accounting set: { "<ip>": bytes } (empty when the set does not exist) */
+function fetch_acct(name) {
+	const out = {};
+	let doc = null;
+
+	try {
+		doc = json(run(NFT + ' -j list set inet bypass_logic ' + name));
+	}
+	catch (e) {
+		doc = null;
+	}
+
+	if (type(doc) != 'object' || type(doc.nftables) != 'array')
+		return out;
+
+	for (let item in doc.nftables) {
+		if (type(item) != 'object' || type(item.set) != 'object' || type(item.set.elem) != 'array')
+			continue;
+
+		for (let el in item.set.elem) {
+			if (type(el) != 'object' || type(el.elem) != 'object')
+				continue;
+
+			const e = el.elem;
+
+			if (type(e.val) == 'string' && type(e.counter) == 'object')
+				out[e.val] = int(e.counter.bytes);
+		}
+	}
+
+	return out;
+}
+
 function collect_clients() {
+	const up = fetch_acct('acct_up4');
+	const down = fetch_acct('acct_dn4');
+
+	for (let k, v in fetch_acct('acct_up6'))
+		up[k] = v;
+
+	for (let k, v in fetch_acct('acct_dn6'))
+		down[k] = v;
+
 	const hosts = load_hosts();
 	const neigh = load_neighbours();
 	const clients = [];
@@ -302,7 +344,9 @@ function collect_clients() {
 				ip: ip,
 				mac: (mac != '') ? uc(mac) : '—',
 				hostname: name ?? 'Configured-Device',
-				is_server: g[1]
+				is_server: g[1],
+				up: up[ip],        /* bytes sent by the client / received by it; absent when not accounted yet */
+				down: down[ip]
 			});
 		}
 	}
