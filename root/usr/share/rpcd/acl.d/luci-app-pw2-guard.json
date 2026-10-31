@@ -1,1 +1,15 @@
-
+{
+	"luci-app-pw2-guard": {
+		"description": "Grant access to PW2 Guard",
+		"read": {
+			"ubus": {
+				"luci.pw2_guard": [ "status", "data" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"luci.pw2_guard": [ "set_bypass", "set_natmap" ]
+			}
+		}
+	}
+}
