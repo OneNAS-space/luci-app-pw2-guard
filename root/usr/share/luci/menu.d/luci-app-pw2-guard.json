@@ -1,1 +1,14 @@
-
+{
+	"admin/services/pw2_guard": {
+		"title": "PW2 Guard",
+		"order": 70,
+		"action": {
+			"type": "view",
+			"path": "pw2_guard/status"
+		},
+		"depends": {
+			"acl": [ "luci-app-pw2-guard" ],
+			"uci": { "passwall2": true }
+		}
+	}
+}
