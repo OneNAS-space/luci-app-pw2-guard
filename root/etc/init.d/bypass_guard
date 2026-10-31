@@ -93,6 +93,25 @@ setup_nft() {
     nft "add set inet bypass_logic psw_vpn_clients { type ipv4_addr; }" 2>/dev/null
     nft "add set inet bypass_logic psw_vpn_clients6 { type ipv6_addr; }" 2>/dev/null
 
+    # Per-client traffic accounting for the LuCI page: sets with per-element counters,
+    # separate for upload (source) and download (destination). They are not flushed on
+    # sync, so the counters survive a client re-sync and only reset when the service stops.
+    nft "add set inet bypass_logic acct_up4 { type ipv4_addr; counter; }" 2>/dev/null
+    nft "add set inet bypass_logic acct_dn4 { type ipv4_addr; counter; }" 2>/dev/null
+    nft "add set inet bypass_logic acct_up6 { type ipv6_addr; counter; }" 2>/dev/null
+    nft "add set inet bypass_logic acct_dn6 { type ipv6_addr; counter; }" 2>/dev/null
+
+    # Forward hook: after NAT is undone for replies, so a download still carries the client address.
+    # Only traffic that leaves / enters the LAN is counted (not LAN to LAN routing).
+    if ! nft list chain inet bypass_logic client_acct >/dev/null 2>&1; then
+        nft "add chain inet bypass_logic client_acct { type filter hook forward priority -5; policy accept; }"
+    fi
+    nft flush chain inet bypass_logic client_acct
+    nft add rule inet bypass_logic client_acct iifname "$LAN_IF" oifname != "$LAN_IF" ip saddr @acct_up4 counter
+    nft add rule inet bypass_logic client_acct iifname != "$LAN_IF" oifname "$LAN_IF" ip daddr @acct_dn4 counter
+    nft add rule inet bypass_logic client_acct iifname "$LAN_IF" oifname != "$LAN_IF" ip6 saddr @acct_up6 counter
+    nft add rule inet bypass_logic client_acct iifname != "$LAN_IF" oifname "$LAN_IF" ip6 daddr @acct_dn6 counter
+
     if ! nft list chain inet bypass_logic dynamic_logic >/dev/null 2>&1; then
         nft "add chain inet bypass_logic dynamic_logic { type filter hook prerouting priority -400; policy accept; }"
     fi
@@ -132,6 +151,26 @@ sync_clients() {
 
     local nft_file="/tmp/bypass_guard_sync.nft"
 
+    # Emit the nft lines for one client address ($1); $2 non-empty = QUIC-direct "server" client.
+    # The accounting elements are only added (never flushed): adding an existing element keeps its counters.
+    emit_client() {
+        case "$1" in
+            *:*)
+                echo "add element inet bypass_logic psw_vpn_clients6 { $1 }"
+                echo "add element inet bypass_logic acct_up6 { $1 counter }"
+                echo "add element inet bypass_logic acct_dn6 { $1 counter }"
+                [ -n "$2" ] && echo "add element inet bypass_logic quic_direct_clients6 { $1 }"
+                ;;
+            *)
+                echo "add element inet bypass_logic psw_vpn_clients { $1 }"
+                echo "add element inet bypass_logic acct_up4 { $1 counter }"
+                echo "add element inet bypass_logic acct_dn4 { $1 counter }"
+                [ -n "$2" ] && echo "add element inet bypass_logic quic_direct_clients { $1 }"
+                ;;
+        esac
+        return 0
+    }
+
     # Flush and refill all four sets in ONE nft transaction, so there is no empty
     # window and a failure leaves the previous contents untouched.
     {
@@ -147,21 +186,14 @@ sync_clients() {
             local ips=$(uci -q get dhcp.$section.ip)
             for ip in $ips; do
                 [ -z "$ip" ] && continue
-                echo "add element inet bypass_logic psw_vpn_clients { $ip }"
-                [ -n "$is_server" ] && echo "add element inet bypass_logic quic_direct_clients { $ip }"
+                emit_client "$ip" "$is_server"
             done
 
             local macs=$(uci -q get "dhcp.$section.mac")
             for mac in $macs; do
                 local active_ips=$(ip neigh show | grep -i "$mac" | grep -E "REACHABLE|STALE|DELAY" | awk '{print $1}' | grep -v '^fe80')
                 for ip in $active_ips; do
-                    if echo "$ip" | grep -q ':'; then
-                        echo "add element inet bypass_logic psw_vpn_clients6 { $ip }"
-                        [ -n "$is_server" ] && echo "add element inet bypass_logic quic_direct_clients6 { $ip }"
-                    else
-                        echo "add element inet bypass_logic psw_vpn_clients { $ip }"
-                        [ -n "$is_server" ] && echo "add element inet bypass_logic quic_direct_clients { $ip }"
-                    fi
+                    emit_client "$ip" "$is_server"
                 done
             done
 
@@ -169,8 +201,7 @@ sync_clients() {
             if [ -n "$v6_prefix" ] && [ -n "$hid" ]; then
                 hid=$(echo $hid | sed 's/^://')
                 local v6_fixed="${v6_prefix}::${hid}"
-                echo "add element inet bypass_logic psw_vpn_clients6 { $v6_fixed }"
-                [ -n "$is_server" ] && echo "add element inet bypass_logic quic_direct_clients6 { $v6_fixed }"
+                emit_client "$v6_fixed" "$is_server"
             fi
         done
     } > "$nft_file"
