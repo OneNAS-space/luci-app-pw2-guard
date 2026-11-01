@@ -68,13 +68,14 @@ const CSS =
 	'.pg-clients .pg-ip, .pg-clients .pg-mac { display:block; }' +
 	'.pg-clients .pg-mac { font-size:.85em; opacity:.8; }' +
 	'.pg-clients .pg-cn, .pg-clients .pg-cs { display:inline-block; white-space:nowrap; text-align:center; }' +
+	'.pg-clients .pg-arr { font-size:.7em; margin-right:.3em; vertical-align:.08em; }' +
 	'.pg-clients .pg-cn { min-width:10.5ch; }' +
 	'.pg-clients .pg-cs { min-width:12ch; font-size:.85em; font-weight:bold; }' +
 	/* same colours as the Inbound / Outbound labels of the realtime bandwidth graph: download blue, upload green */
 	'.pg-clients .pg-cs-dn { color:blue; }' +
 	'.pg-clients .pg-cs-up { color:green; }' +
 	/* traffic column: as narrow as its content, the block centred under its header, its cells centred too */
-	'.pg-clients .pg-trafbox { display:inline-grid; grid-template-columns:auto auto; column-gap:.7em; row-gap:.05rem; text-align:center; }' +
+	'.pg-clients .pg-trafbox { display:inline-grid; grid-template-columns:auto auto; align-items:baseline; column-gap:.7em; row-gap:.05rem; text-align:center; }' +
 	'@container (min-width: ' + RULES_TABLE_MIN + 'px) {' +
 	wideCss('.pg-rules') +
 	'  .pg-rules .td.pg-ract { white-space:normal; }' +
@@ -375,16 +376,23 @@ return view.extend({
 					tag.appendChild(badge('Server', '#0069d6'));
 
 				/* line 1: total sent / received, line 2: current speed */
+				/* the arrow is a separate, smaller glyph: the full-size one looks heavy next to the digits */
+				const mk = (cls, arrow) => {
+					const v = textEl('span', '', '');
+
+					return { v: v, o: E('span', { 'class': cls }, [ textEl('span', 'pg-arr', arrow), v ]) };
+				};
+
 				const ref = {
-					tu: textEl('span', 'pg-cn', ''), td: textEl('span', 'pg-cn', ''),
-					su: textEl('span', 'pg-cs pg-cs-up', ''), sd: textEl('span', 'pg-cs pg-cs-dn', '')
+					tu: mk('pg-cn', '\u2191'), td: mk('pg-cn', '\u2193'),
+					su: mk('pg-cs pg-cs-up', '\u2191'), sd: mk('pg-cs pg-cs-dn', '\u2193')
 				};
 
 				this.clientRefs[c.ip] = ref;
 
 				const traf = E('td', { 'class': 'td pg-traf', 'title': _('Upload / Download') }, [
 					/* a 2 x 2 grid: one row per direction (upload, download), traffic then speed in the columns */
-					E('div', { 'class': 'pg-trafbox' }, [ ref.tu, ref.su, ref.td, ref.sd ])
+					E('div', { 'class': 'pg-trafbox' }, [ ref.tu.o, ref.su.o, ref.td.o, ref.sd.o ])
 				]);
 
 				crows.push(E('tr', { 'class': 'tr cbi-section-table-row cbi-rowstyle-' + (1 + i % 2) }, [
@@ -412,7 +420,7 @@ return view.extend({
 
 			/* no counters (service started before the accounting rules existed): show dashes */
 			if (up == null || down == null) {
-				ref.tu.textContent = ref.td.textContent = ref.su.textContent = ref.sd.textContent = '\u2014';
+				ref.tu.v.textContent = ref.td.v.textContent = ref.su.v.textContent = ref.sd.v.textContent = '\u2014';
 				delete this.lastClient[c.ip];
 				return;
 			}
@@ -422,10 +430,10 @@ return view.extend({
 			/* a counter that went down was reset (service restarted): count that interval as zero */
 			const rate = (cur, old) => (old !== undefined && cur >= old) ? (cur - old) / POLL_INTERVAL : 0;
 
-			ref.tu.textContent = '\u2191 ' + formatBytes(up);
-			ref.td.textContent = '\u2193 ' + formatBytes(down);
-			ref.su.textContent = '\u2191 ' + formatBytes(rate(up, prev && prev.up)) + '/s';
-			ref.sd.textContent = '\u2193 ' + formatBytes(rate(down, prev && prev.down)) + '/s';
+			ref.tu.v.textContent = formatBytes(up);
+			ref.td.v.textContent = formatBytes(down);
+			ref.su.v.textContent = formatBytes(rate(up, prev && prev.up)) + '/s';
+			ref.sd.v.textContent = formatBytes(rate(down, prev && prev.down)) + '/s';
 
 			this.lastClient[c.ip] = { up: up, down: down };
 		});
