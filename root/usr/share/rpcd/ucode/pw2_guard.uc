@@ -230,30 +230,41 @@ function load_neighbours() {
 	return map;
 }
 
+/* all sets of the table in ONE nft call (forking is the expensive part on small ARM routers): { name: [ elem, ... ] } */
+let SETS = {};
+
+function load_sets() {
+	let doc = null;
+
+	SETS = {};
+
+	try {
+		doc = json(run(NFT + ' -j list table inet bypass_logic'));
+	}
+	catch (e) {
+		doc = null;
+	}
+
+	if (type(doc) != 'object' || type(doc.nftables) != 'array')
+		return;
+
+	for (let item in doc.nftables) {
+		if (type(item) == 'object' && type(item.set) == 'object' && type(item.set.name) == 'string')
+			SETS[item.set.name] = (type(item.set.elem) == 'array') ? item.set.elem : [];
+	}
+}
+
+/* plain member addresses of a set */
 function fetch_set(name) {
-	const raw = run(NFT + ' list set inet bypass_logic ' + name);
-	const i = index(raw, 'elements = {');
-
-	if (i < 0)
-		return [];
-
-	let rest = substr(raw, i + 12);
-	const j = index(rest, '}');
-
-	if (j >= 0)
-		rest = substr(rest, 0, j);
-
 	const out = [];
 
-	for (let tok in split(rest, /[, \t\n]+/)) {
-		if (!tok)
-			continue;
-
-		if (index(tok, 'timeout') >= 0 || index(tok, 'expires') >= 0)
-			continue;
-
-		if (match(tok, /[0-9]+\.[0-9]+/) || index(tok, ':') >= 0)
-			push(out, tok);
+	for (let el in (SETS[name] ?? [])) {
+		if (type(el) == 'string')
+			push(out, el);
+		else if (type(el) == 'object' && type(el.elem) == 'object' && type(el.elem.val) == 'string')
+			push(out, el.elem.val);
+		else if (type(el) == 'object' && type(el.prefix) == 'object')
+			push(out, el.prefix.addr + '/' + el.prefix.len);
 	}
 
 	return out;
@@ -262,37 +273,23 @@ function fetch_set(name) {
 /* per-element byte counters of an accounting set: { "<ip>": bytes } (empty when the set does not exist) */
 function fetch_acct(name) {
 	const out = {};
-	let doc = null;
 
-	try {
-		doc = json(run(NFT + ' -j list set inet bypass_logic ' + name));
-	}
-	catch (e) {
-		doc = null;
-	}
-
-	if (type(doc) != 'object' || type(doc.nftables) != 'array')
-		return out;
-
-	for (let item in doc.nftables) {
-		if (type(item) != 'object' || type(item.set) != 'object' || type(item.set.elem) != 'array')
+	for (let el in (SETS[name] ?? [])) {
+		if (type(el) != 'object' || type(el.elem) != 'object')
 			continue;
 
-		for (let el in item.set.elem) {
-			if (type(el) != 'object' || type(el.elem) != 'object')
-				continue;
+		const e = el.elem;
 
-			const e = el.elem;
-
-			if (type(e.val) == 'string' && type(e.counter) == 'object')
-				out[e.val] = int(e.counter.bytes);
-		}
+		if (type(e.val) == 'string' && type(e.counter) == 'object')
+			out[e.val] = int(e.counter.bytes);
 	}
 
 	return out;
 }
 
 function collect_clients() {
+	load_sets();
+
 	const up = fetch_acct('acct_up4');
 	const down = fetch_acct('acct_dn4');
 
