@@ -101,16 +101,23 @@ setup_nft() {
     nft "add set inet bypass_logic acct_up6 { type ipv6_addr; counter; }" 2>/dev/null
     nft "add set inet bypass_logic acct_dn6 { type ipv6_addr; counter; }" 2>/dev/null
 
-    # Forward hook: after NAT is undone for replies, so a download still carries the client address.
-    # Only traffic that leaves / enters the LAN is counted (not LAN to LAN routing).
-    if ! nft list chain inet bypass_logic client_acct >/dev/null 2>&1; then
-        nft "add chain inet bypass_logic client_acct { type filter hook forward priority -5; policy accept; }"
+    # Upload is counted in prerouting, download in postrouting. Unlike the forward hook these also see the
+    # traffic PassWall2 handles: its TPROXY / REDIRECT delivers packets to a local process (input) and the
+    # replies are generated locally (output), neither of which is ever "forwarded".
+    # The old forward-hook chain of earlier versions is removed.
+    nft delete chain inet bypass_logic client_acct 2>/dev/null
+    if ! nft list chain inet bypass_logic acct_in >/dev/null 2>&1; then
+        nft "add chain inet bypass_logic acct_in { type filter hook prerouting priority -420; policy accept; }"
     fi
-    nft flush chain inet bypass_logic client_acct
-    nft add rule inet bypass_logic client_acct iifname "$LAN_IF" oifname != "$LAN_IF" ip saddr @acct_up4 counter
-    nft add rule inet bypass_logic client_acct iifname != "$LAN_IF" oifname "$LAN_IF" ip daddr @acct_dn4 counter
-    nft add rule inet bypass_logic client_acct iifname "$LAN_IF" oifname != "$LAN_IF" ip6 saddr @acct_up6 counter
-    nft add rule inet bypass_logic client_acct iifname != "$LAN_IF" oifname "$LAN_IF" ip6 daddr @acct_dn6 counter
+    if ! nft list chain inet bypass_logic acct_out >/dev/null 2>&1; then
+        nft "add chain inet bypass_logic acct_out { type filter hook postrouting priority 0; policy accept; }"
+    fi
+    nft flush chain inet bypass_logic acct_in
+    nft flush chain inet bypass_logic acct_out
+    nft add rule inet bypass_logic acct_in iifname "$LAN_IF" ip saddr @acct_up4 counter
+    nft add rule inet bypass_logic acct_in iifname "$LAN_IF" ip6 saddr @acct_up6 counter
+    nft add rule inet bypass_logic acct_out oifname "$LAN_IF" ip daddr @acct_dn4 counter
+    nft add rule inet bypass_logic acct_out oifname "$LAN_IF" ip6 daddr @acct_dn6 counter
 
     if ! nft list chain inet bypass_logic dynamic_logic >/dev/null 2>&1; then
         nft "add chain inet bypass_logic dynamic_logic { type filter hook prerouting priority -400; policy accept; }"
