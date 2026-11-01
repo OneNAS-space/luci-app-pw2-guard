@@ -22,7 +22,9 @@ const callData = rpc.declare({ object: 'luci.pw2_guard', method: 'data' });
 const callSetBypass = rpc.declare({ object: 'luci.pw2_guard', method: 'set_bypass', params: [ 'set' ] });
 const callSetNatmap = rpc.declare({ object: 'luci.pw2_guard', method: 'set_natmap', params: [ 'set' ] });
 
-const POLL_INTERVAL = 3;
+/* seconds between two refreshes. One refresh takes about 0.13 s on the slowest supported box (WHW03v2);
+ * at 1 s that is roughly 13% of one core while the page is open, nothing when it is closed or in a background tab. */
+const POLL_INTERVAL = 1;
 
 /* The two tables switch from a real table to cards at different widths: the clients table has more to show
  * per row (address + MAC, traffic + speed), so it needs more room. */
@@ -281,11 +283,17 @@ return view.extend({
 	},
 
 	/* The tables are only rebuilt when their structure changes (a rule or client appears/disappears).
-	 * Otherwise the existing cells are updated in place, so the 3 s poll never replaces the DOM
+	 * Otherwise the existing cells are updated in place, so the poll never replaces the DOM
 	 * (which used to collapse the page height for a moment and throw the scroll position back to the top). */
 	update(data) {
-		this.updateRules(data.rules || []);
-		this.updateClients(data.clients || []);
+		/* speeds are computed from the real time between two samples, not from the nominal interval */
+		const now = Date.now();
+		const dt = this.lastSample ? (now - this.lastSample) / 1000 : 0;
+
+		this.lastSample = now;
+
+		this.updateRules(data.rules || [], dt);
+		this.updateClients(data.clients || [], dt);
 	},
 
 	keepScroll(fn) {
@@ -298,7 +306,7 @@ return view.extend({
 			sc.scrollTop = top;
 	},
 
-	updateRules(rules) {
+	updateRules(rules, dt) {
 		const key = rules.map(r => r.name).join('\n');
 
 		if (key !== this.ruleKey) {
@@ -340,8 +348,8 @@ return view.extend({
 
 			ref.pk.textContent = String(r.packets);
 			ref.by.textContent = formatBytes(cur);
-			const speed = (prev !== undefined && cur > prev)
-				? '\u2191 ' + formatBytes((cur - prev) / POLL_INTERVAL) + '/s' : '';
+			const speed = (prev !== undefined && cur > prev && dt > 0)
+				? '\u2191 ' + formatBytes((cur - prev) / dt) + '/s' : '';
 
 			ref.sp.textContent = speed ? ' ' + speed : '';
 			ref.sp2.textContent = speed;
@@ -356,7 +364,7 @@ return view.extend({
 
 	/* The rows are only rebuilt when a client appears, disappears or changes its name / address / tag;
 	 * the traffic numbers are written into the existing cells on every poll. */
-	updateClients(clients) {
+	updateClients(clients, dt) {
 		const key = JSON.stringify(clients.map(c => [ c.ip, c.mac, c.hostname, c.is_server ]));
 
 		if (key !== this.clientKey) {
@@ -428,7 +436,7 @@ return view.extend({
 			const prev = this.lastClient[c.ip];
 
 			/* a counter that went down was reset (service restarted): count that interval as zero */
-			const rate = (cur, old) => (old !== undefined && cur >= old) ? (cur - old) / POLL_INTERVAL : 0;
+			const rate = (cur, old) => (old !== undefined && cur >= old && dt > 0) ? (cur - old) / dt : 0;
 
 			ref.tu.v.textContent = formatBytes(up);
 			ref.td.v.textContent = formatBytes(down);
